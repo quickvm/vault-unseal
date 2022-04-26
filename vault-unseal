@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Copyright (c) 2022 QuickVM, LLC <contact@quickvm.com> All Rights Reserved.
+
+## !! Warning!!
+#
+# Do not use this in production! Storing your vault unseal keys on the same disk
+# as your production vault service is a _BAD_ idea. Do not use this to unseal
+# your vault cluster if your secret data is important. Use a KMS or HSM instead!
+#
+## !! Warning !!
+
+set -e
+
+: ${VAULT_ADDR:=https://127.0.0.1:8200}
+: ${VAULT_KEY_FILE:=/etc/vault.d/keys}
+: ${VAULT_KEY_THRESHOLD:=3}
+
+: ${TIMEOUT_MAX:=15}
+
+[[ $UID == 0 ]] || { echo "Please run this as root!"; exit 1; }
+[[ -f ${VAULT_KEY_FILE} ]] || { echo "The ${VAULT_KEY_FILE} file does not exist! Please create it!"; exit 1; }
+[[ -s ${VAULT_KEY_FILE} ]] || { echo "The ${VAULT_KEY_FILE} file is empty! Please add your Vault keys!"; exit 1; }
+[[ $(stat -c '%a' ${VAULT_KEY_FILE}) == 600 ]] || { echo "Insecure ${VAULT_KEY_FILE}! Please set permissions to 0600!"; exit 1; }
+
+check_vault_status(){
+  STATUS=${1}
+  VAULT_STATUS="$(curl -I -s -L -w '%{http_code}' -o /dev/null ${VAULT_ADDR}/v1/sys/health)"
+  [ ${VAULT_STATUS} -eq ${STATUS} ]
+}
+
+if check_vault_status 200;then
+  echo "Message: The Vault service is initialized, unsealed, and active."
+  echo "Status: ${VAULT_STATUS}"
+  exit 0
+else
+  echo -n "Waiting for Vault service..."
+  TIMEOUT_COUNTER=0
+  until check_vault_status 503
+  do
+    if [ ${TIMEOUT_COUNTER} -eq ${TIMEOUT_MAX} ];then
+      if [ ${VAULT_STATUS} -eq 000 ];then
+        echo ""
+        echo "Error: Connecting to ${VAULT_ADDR} timed out."
+        echo "Status: ${VAULT_STATUS}"
+        exit 1
+      elif [ ${VAULT_STATUS} -eq 429 ];then
+        echo ""
+        echo "Error: The Vault service is unsealed and in standby."
+        echo "Status: ${VAULT_STATUS}"
+        exit 1
+      elif [ ${VAULT_STATUS} -eq 472 ];then
+        echo ""
+        echo "Error: The Vault service is in disaster recovery mode replication secondary and active."
+        echo "Status: ${VAULT_STATUS}"
+        exit 1
+      elif [ ${VAULT_STATUS} -eq 473 ];then
+        echo ""
+        echo "Error: The Vault service is in performance standby."
+        echo "Status: ${VAULT_STATUS}"
+        exit 1
+      elif [ ${VAULT_STATUS} -eq 501 ];then
+        echo ""
+        echo "Error: The Vault service is not initialized."
+        echo "Status: ${VAULT_STATUS}"
+        exit 1
+      fi
+    fi
+  echo -n '.'
+  TIMEOUT_COUNTER=$(($TIMEOUT_COUNTER+1))
+  sleep 1
+  done
+
+  echo ""
+  echo "Unsealing Vault..."
+  readarray -t VAULT_KEYS < ${VAULT_KEY_FILE}
+  for VAULT_KEY in $(shuf -e ${VAULT_KEYS[@]}  -n ${VAULT_KEY_THRESHOLD});do
+    VAULT_JSON=$(jq --compact-output -nR --arg vault_key "${VAULT_KEY}" \
+                '{"key": $vault_key,"reset":false,"migrate":false}')
+    curl -s -X PUT -H "X-Vault-Token: $(vault print token)" \
+    -H "X-Vault-Request: true" \
+    -d ${VAULT_JSON} \
+    ${VAULT_ADDR}/v1/sys/unseal
+  done
+
+  vault status
+
+fi

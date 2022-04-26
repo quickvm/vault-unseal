@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# Copyright (c) 2022 QuickVM, LLC <contact@quickvm.com> All Rights Reserved.
+
+## !! Warning !!
+#
+# Do not use this in production! Storing your vault unseal keys on the same disk
+# as your production vault service is a _BAD_ idea. Do not use this to unseal
+# your vault cluster if your secret data is important. Use a KMS or HSM instead!
+#
+## !! Warning !!
+
+set -e
+
+[[ $UID == 0 ]] || { echo "Please run this as root!"; exit 1; }
+
+: ${BIN_DIR:=/usr/local/bin}
+: ${UNIT_DIR:=/etc/systemd/system}
+: ${VAULT_KEY_FILE:=/etc/vault.d/keys}
+
+[[ -d $(dirname ${VAULT_KEY_FILE}) ]] || { echo "The $(dirname ${VAULT_KEY_FILE}) directory does not exist! Please create it!"; exit 1; }
+
+install vault-unseal ${BIN_DIR}
+install -m 0644 vault-unseal.service ${UNIT_DIR}
+install -m 0644 -D override.conf /etc/systemd/system/vault.service.d/override.conf
+(umask 177; touch ${VAULT_KEY_FILE})
+
+systemctl daemon-reload
+systemctl enable vault-unseal.service
+
+echo ""
+echo "Great job, vault-unseal is now installed!"
+echo "When you start or restart vault.service your Vault will be unsealed automatically."
+[[ -s ${VAULT_KEY_FILE} ]] || { echo ""; echo "The ${VAULT_KEY_FILE} file is empty! Please add your Vault keys!"; }
+echo ""
+echo "If you want to uninstall vault-unseal please manually run these commands as the root user:"
+echo "sudo rm -f /etc/systemd/system/vault.service.d/override.conf"
+echo "sudo systemctl disable vault-unseal.service"
+echo "sudo rm -f ${BIN_DIR}/vault-unseal"
+echo "sudo rm -f ${UNIT_DIR}/vault-unseal.service"
+echo "sudo systemctl daemon-reload"
+echo ""

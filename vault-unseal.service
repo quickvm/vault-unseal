@@ -1,0 +1,14 @@
+[Unit]
+Description=Automatically unseal your Hashicorp Vault service
+Documentation=https://github.com/quickvm/vault-unseal
+After=vault.service
+Requires=vault.service
+PartOf=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=vault-unseal
+RemainAfterExit=false
+
+[Install]
+WantedBy=multi-user.target
